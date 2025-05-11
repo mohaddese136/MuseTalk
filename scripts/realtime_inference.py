@@ -25,6 +25,7 @@ import queue
 import time
 import subprocess
 from IPython.display import display, Video
+import imageio
 
 def fast_check_ffmpeg():
     try:
