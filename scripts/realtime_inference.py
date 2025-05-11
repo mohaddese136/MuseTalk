@@ -268,26 +268,31 @@ class Avatar:
         start_time = time.time()
         res_frame_list = []
 
-        for i, (whisper_batch, latent_batch) in enumerate(tqdm(gen, total=int(np.ceil(float(video_num) / self.batch_size)))):
-            audio_feature_batch = pe(whisper_batch.to(device))
-            latent_batch = latent_batch.to(device=device, dtype=unet.model.dtype)
-            
-            pred_latents = unet.model(latent_batch, timesteps, encoder_hidden_states=audio_feature_batch).sample
-            pred_latents = pred_latents.to(device=device, dtype=vae.vae.dtype)
-            recon = vae.decode_latents(pred_latents)
-            
-            # Save the batch as a video
-            preview_dir = f"{self.avatar_path}/preview"
-            os.makedirs(preview_dir, exist_ok=True)
-            batch_video_path = os.path.join(preview_dir, f"chunk_{i:04d}.mp4")
-            
-            # Use imageio to write batch video
-            writer = imageio.get_writer(batch_video_path, fps=args.fps)
-            
-            for frame in recon:
-                frame_uint8 = frame.astype(np.uint8)
-                writer.append_data(frame_uint8)
-                res_frame_queue.put(frame)
+        #trying to show the video as they get generated 
+        with tqdm(total=int(np.ceil(float(video_num) / self.batch_size)), desc="Doing inference...", unit="batch") as pbar:
+            for i, (whisper_batch, latent_batch) in enumerate(gen):
+                audio_feature_batch = pe(whisper_batch.to(device))
+                latent_batch = latent_batch.to(device=device, dtype=unet.model.dtype)
+                
+                pred_latents = unet.model(latent_batch, timesteps, encoder_hidden_states=audio_feature_batch).sample
+                pred_latents = pred_latents.to(device=device, dtype=vae.vae.dtype)
+                recon = vae.decode_latents(pred_latents)
+                
+                # Save the batch as a video
+                batch_video_path = os.path.join(preview_dir, f"chunk_{i}.mp4")
+                
+                writer = imageio.get_writer(batch_video_path, fps=args.fps)
+                for frame in recon:
+                    frame_uint8 = frame.astype(np.uint8)
+                    writer.append_data(frame_uint8)
+                    res_frame_queue.put(frame)
+                writer.close()
+                
+                # Display the video - just like in your working example
+                display(Video(batch_video_path, embed=True))
+                
+                # Update progress bar
+                pbar.update(1)
             
             writer.close()
         # Close the queue and sub-thread after all tasks are completed
