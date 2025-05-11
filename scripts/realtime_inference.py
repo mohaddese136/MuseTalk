@@ -276,19 +276,20 @@ class Avatar:
             pred_latents = pred_latents.to(device=device, dtype=vae.vae.dtype)
             recon = vae.decode_latents(pred_latents)
             
-            # Save and display the batch
+            # Save the batch as a video
             preview_dir = f"{self.avatar_path}/preview"
             os.makedirs(preview_dir, exist_ok=True)
-            batch_video_path = os.path.join(preview_dir, f"chunk_{i}.mp4")
+            batch_video_path = os.path.join(preview_dir, f"chunk_{i:04d}.mp4")
             
+            # Use imageio to write batch video
             writer = imageio.get_writer(batch_video_path, fps=args.fps)
-            for frame in recon:
-                writer.append_data(frame.astype(np.uint8))
-                res_frame_queue.put(frame)  # Still add to queue for normal processing
-            writer.close()
             
-            # Display the video (if in Jupyter)
-            display(Video(batch_video_path, embed=True))
+            for frame in recon:
+                frame_uint8 = frame.astype(np.uint8)
+                writer.append_data(frame_uint8)
+                res_frame_queue.put(frame)
+            
+            writer.close()
         # Close the queue and sub-thread after all tasks are completed
         process_thread.join()
 
