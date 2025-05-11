@@ -11,7 +11,6 @@ from tqdm import tqdm
 import copy
 import json
 from transformers import WhisperModel
-from IPython.display import display, Video, clear_output
 
 from musetalk.utils.face_parsing import FaceParsing
 from musetalk.utils.utils import datagen
@@ -25,7 +24,7 @@ import threading
 import queue
 import time
 import subprocess
-
+from IPython.display import display, Video
 
 def fast_check_ffmpeg():
     try:
@@ -271,73 +270,24 @@ class Avatar:
         for i, (whisper_batch, latent_batch) in enumerate(tqdm(gen, total=int(np.ceil(float(video_num) / self.batch_size)))):
             audio_feature_batch = pe(whisper_batch.to(device))
             latent_batch = latent_batch.to(device=device, dtype=unet.model.dtype)
-        
-            pred_latents = unet.model(latent_batch,
-                                    timesteps,
-                                    encoder_hidden_states=audio_feature_batch).sample
+            
+            pred_latents = unet.model(latent_batch, timesteps, encoder_hidden_states=audio_feature_batch).sample
             pred_latents = pred_latents.to(device=device, dtype=vae.vae.dtype)
             recon = vae.decode_latents(pred_latents)
             
-            # Calculate batch frame indices
-            batch_start_idx = i * self.batch_size
-            batch_end_idx = min(batch_start_idx + self.batch_size, video_num)
-            batch_size_actual = batch_end_idx - batch_start_idx
+            # Save and display the batch
+            preview_dir = f"{self.avatar_path}/preview"
+            os.makedirs(preview_dir, exist_ok=True)
+            batch_video_path = os.path.join(preview_dir, f"chunk_{i}.mp4")
             
-            # Process and save frames
-            frame_indices = []
-            for j, res_frame in enumerate(recon):
-                if j >= batch_size_actual:
-                    break
-                frame_idx = batch_start_idx + j
-                res_frame_queue.put(res_frame)
-                frame_indices.append(frame_idx)
+            writer = imageio.get_writer(batch_video_path, fps=args.fps)
+            for frame in recon:
+                writer.append_data(frame.astype(np.uint8))
+                res_frame_queue.put(frame)  # Still add to queue for normal processing
+            writer.close()
             
-            # Wait for frames to be processed by the other thread
-            time.sleep(0.5)  # Give process_frames thread time to save images
-            
-            if not args.skip_save_images and i % args.batch_display_interval == 0:  # Add batch_display_interval arg
-                # Calculate audio timing for this batch in seconds
-                audio_start_time = batch_start_idx / fps
-                audio_duration = batch_size_actual / fps
-                
-                # Extract audio segment for this batch
-                batch_audio_path = f"{self.avatar_path}/batch_audio_{i}.wav"
-                cmd_extract_audio = f"ffmpeg -y -v warning -i {audio_path} -ss {audio_start_time} -t {audio_duration} {batch_audio_path}"
-                os.system(cmd_extract_audio)
-                
-                # Create video from frames
-                batch_frames_path = f"{self.avatar_path}/tmp/batch_{i}"
-                os.makedirs(batch_frames_path, exist_ok=True)
-                
-                # Copy the frames corresponding to this batch to a separate directory
-                for j in range(batch_size_actual):
-                    frame_idx = batch_start_idx + j
-                    src_frame = f"{self.avatar_path}/tmp/{str(frame_idx).zfill(8)}.png"
-                    dst_frame = f"{batch_frames_path}/{str(j).zfill(8)}.png"
-                    if os.path.exists(src_frame):
-                        shutil.copy(src_frame, dst_frame)
-                
-                # Create video from these frames
-                batch_vid_path = f"{self.avatar_path}/batch_{i}.mp4"
-                cmd_img2video = f"ffmpeg -y -v warning -r {fps} -f image2 -i {batch_frames_path}/%08d.png -vcodec libx264 -vf format=yuv420p -crf 18 {batch_frames_path}/temp.mp4"
-                os.system(cmd_img2video)
-                
-                # Combine with audio segment
-                cmd_combine_audio = f"ffmpeg -y -v warning -i {batch_audio_path} -i {batch_frames_path}/temp.mp4 {batch_vid_path}"
-                os.system(cmd_combine_audio)
-                
-                # Optional: Display the video (for GUI environments)
-                if args.display_video:
-                    try:
-                        # This command opens the video with the default player
-                        if sys.platform == "win32":
-                            os.system(f"start {batch_vid_path}")
-                        elif sys.platform == "darwin":
-                            os.system(f"open {batch_vid_path}")
-                        else:
-                            os.system(f"xdg-open {batch_vid_path}")
-                    except:
-                        print(f"Video saved at {batch_vid_path} but couldn't be displayed automatically.")
+            # Display the video (if in Jupyter)
+            display(Video(batch_video_path, embed=True))
         # Close the queue and sub-thread after all tasks are completed
         process_thread.join()
 
