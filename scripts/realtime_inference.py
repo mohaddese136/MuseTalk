@@ -278,34 +278,66 @@ class Avatar:
             pred_latents = pred_latents.to(device=device, dtype=vae.vae.dtype)
             recon = vae.decode_latents(pred_latents)
             
-            # Create a temporary video from this batch
-            frames = []
-            for res_frame in recon:
-                res_frame_queue.put(res_frame)
-                
-                # For display purposes
-                res_frame_rgb = cv2.cvtColor(res_frame.astype(np.uint8), cv2.COLOR_BGR2RGB)
-                frames.append(res_frame_rgb)
+            # Calculate batch frame indices
+            batch_start_idx = i * self.batch_size
+            batch_end_idx = min(batch_start_idx + self.batch_size, video_num)
+            batch_size_actual = batch_end_idx - batch_start_idx
             
-            # Display video of this batch
-            if len(frames) > 0:
-                height, width = frames[0].shape[:2]
+            # Process and save frames
+            frame_indices = []
+            for j, res_frame in enumerate(recon):
+                if j >= batch_size_actual:
+                    break
+                frame_idx = batch_start_idx + j
+                res_frame_queue.put(res_frame)
+                frame_indices.append(frame_idx)
+            
+            # Wait for frames to be processed by the other thread
+            time.sleep(0.5)  # Give process_frames thread time to save images
+            
+            if not args.skip_save_images and i % args.batch_display_interval == 0:  # Add batch_display_interval arg
+                # Calculate audio timing for this batch in seconds
+                audio_start_time = batch_start_idx / fps
+                audio_duration = batch_size_actual / fps
                 
-                # Create a temporary MP4 video
-                import tempfile
-                with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_video:
-                    temp_filename = temp_video.name
+                # Extract audio segment for this batch
+                batch_audio_path = f"{self.avatar_path}/batch_audio_{i}.wav"
+                cmd_extract_audio = f"ffmpeg -y -v warning -i {audio_path} -ss {audio_start_time} -t {audio_duration} {batch_audio_path}"
+                os.system(cmd_extract_audio)
                 
-                # Write frames to video
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                out = cv2.VideoWriter(temp_filename, fourcc, fps, (width, height))
-                for frame in frames:
-                    out.write(frame)
-                out.release()
+                # Create video from frames
+                batch_frames_path = f"{self.avatar_path}/tmp/batch_{i}"
+                os.makedirs(batch_frames_path, exist_ok=True)
                 
-                # Display the video
-                clear_output(wait=True)
-                display(Video(temp_filename, embed=True))
+                # Copy the frames corresponding to this batch to a separate directory
+                for j in range(batch_size_actual):
+                    frame_idx = batch_start_idx + j
+                    src_frame = f"{self.avatar_path}/tmp/{str(frame_idx).zfill(8)}.png"
+                    dst_frame = f"{batch_frames_path}/{str(j).zfill(8)}.png"
+                    if os.path.exists(src_frame):
+                        shutil.copy(src_frame, dst_frame)
+                
+                # Create video from these frames
+                batch_vid_path = f"{self.avatar_path}/batch_{i}.mp4"
+                cmd_img2video = f"ffmpeg -y -v warning -r {fps} -f image2 -i {batch_frames_path}/%08d.png -vcodec libx264 -vf format=yuv420p -crf 18 {batch_frames_path}/temp.mp4"
+                os.system(cmd_img2video)
+                
+                # Combine with audio segment
+                cmd_combine_audio = f"ffmpeg -y -v warning -i {batch_audio_path} -i {batch_frames_path}/temp.mp4 {batch_vid_path}"
+                os.system(cmd_combine_audio)
+                
+                # Optional: Display the video (for GUI environments)
+                if args.display_video:
+                    try:
+                        # This command opens the video with the default player
+                        if sys.platform == "win32":
+                            os.system(f"start {batch_vid_path}")
+                        elif sys.platform == "darwin":
+                            os.system(f"open {batch_vid_path}")
+                        else:
+                            os.system(f"xdg-open {batch_vid_path}")
+                    except:
+                        print(f"Video saved at {batch_vid_path} but couldn't be displayed automatically.")
         # Close the queue and sub-thread after all tasks are completed
         process_thread.join()
 
