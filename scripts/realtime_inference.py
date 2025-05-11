@@ -11,6 +11,7 @@ from tqdm import tqdm
 import copy
 import json
 from transformers import WhisperModel
+from IPython.display import display, Video, clear_output
 
 from musetalk.utils.face_parsing import FaceParsing
 from musetalk.utils.utils import datagen
@@ -270,14 +271,41 @@ class Avatar:
         for i, (whisper_batch, latent_batch) in enumerate(tqdm(gen, total=int(np.ceil(float(video_num) / self.batch_size)))):
             audio_feature_batch = pe(whisper_batch.to(device))
             latent_batch = latent_batch.to(device=device, dtype=unet.model.dtype)
-
+        
             pred_latents = unet.model(latent_batch,
                                     timesteps,
                                     encoder_hidden_states=audio_feature_batch).sample
             pred_latents = pred_latents.to(device=device, dtype=vae.vae.dtype)
             recon = vae.decode_latents(pred_latents)
+            
+            # Create a temporary video from this batch
+            frames = []
             for res_frame in recon:
                 res_frame_queue.put(res_frame)
+                
+                # For display purposes
+                res_frame_rgb = cv2.cvtColor(res_frame.astype(np.uint8), cv2.COLOR_BGR2RGB)
+                frames.append(res_frame_rgb)
+            
+            # Display video of this batch
+            if len(frames) > 0:
+                height, width = frames[0].shape[:2]
+                
+                # Create a temporary MP4 video
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_video:
+                    temp_filename = temp_video.name
+                
+                # Write frames to video
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                out = cv2.VideoWriter(temp_filename, fourcc, fps, (width, height))
+                for frame in frames:
+                    out.write(frame)
+                out.release()
+                
+                # Display the video
+                clear_output(wait=True)
+                display(Video(temp_filename, embed=True))
         # Close the queue and sub-thread after all tasks are completed
         process_thread.join()
 
